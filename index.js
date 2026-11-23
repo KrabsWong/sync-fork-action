@@ -3,7 +3,7 @@
 const fs = require('node:fs');
 
 const DEFAULT_API_URL = 'https://api.github.com';
-const VALID_STRATEGIES = new Set(['fast-forward', 'reset']);
+const VALID_STRATEGIES = new Set(['fast-forward', 'merge', 'reset']);
 
 function log(message) {
   process.stdout.write(`${message}\n`);
@@ -92,6 +92,15 @@ function setBranchSha(slug, branch, sha, force, token) {
   return request('PATCH', path, token, { sha, force });
 }
 
+function mergeUpstream(slug, targetBranch, upstreamSha, token) {
+  const path = `/repos/${encodeSlug(slug)}/merges`;
+  return request('POST', path, token, {
+    base: targetBranch,
+    head: upstreamSha,
+    commit_message: `Merge upstream into ${targetBranch}`,
+  });
+}
+
 async function compareCommits(slug, previousSha, upstreamSha, token) {
   const base = encodeURIComponent(previousSha);
   const head = encodeURIComponent(upstreamSha);
@@ -126,7 +135,9 @@ async function run() {
   );
   const strategy = getInput('strategy', 'fast-forward');
   if (!VALID_STRATEGIES.has(strategy)) {
-    throw new Error(`Input "strategy" must be fast-forward or reset, received "${strategy}".`);
+    throw new Error(
+      `Input "strategy" must be fast-forward, merge or reset, received "${strategy}".`,
+    );
   }
   const dryRun = getBooleanInput('dry-run', false);
 
@@ -160,6 +171,7 @@ async function run() {
   log(`Upstream: ${upstreamSlug}@${upstreamBranch} (${upstreamSha})`);
 
   let updated = false;
+  let resultSha = upstreamSha;
   if (previousSha === upstreamSha) {
     log('Already up to date.');
   } else if (strategy === 'fast-forward') {
@@ -177,6 +189,20 @@ async function run() {
       updated = true;
       log(`Fast-forwarded ${comparison.aheadBy} commit(s).`);
     }
+  } else if (strategy === 'merge') {
+    if (dryRun) {
+      log('Dry run: would merge upstream into the fork branch.');
+    } else {
+      const merge = await mergeUpstream(forkSlug, targetBranch, upstreamSha, token);
+      if (merge && merge.sha) {
+        resultSha = merge.sha;
+        updated = true;
+        log(`Merged upstream into ${targetBranch} (${resultSha}).`);
+      } else {
+        resultSha = previousSha;
+        log('Already up to date.');
+      }
+    }
   } else if (dryRun) {
     log('Dry run: would reset the fork branch to upstream.');
   } else {
@@ -188,7 +214,7 @@ async function run() {
   const result = {
     updated: String(updated),
     'previous-sha': previousSha,
-    sha: upstreamSha,
+    sha: resultSha,
     'upstream-sha': upstreamSha,
     strategy,
   };

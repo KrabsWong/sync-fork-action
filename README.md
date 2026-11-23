@@ -4,7 +4,7 @@ A small GitHub Action that syncs a fork branch from its upstream. It uses only N
 
 The action runs on the `node24` GitHub Actions runtime.
 
-The default `fast-forward` strategy refuses to overwrite commits that exist only in the fork. Use `reset` only when you intentionally want the fork branch to match upstream exactly.
+The default `fast-forward` strategy refuses to overwrite commits that exist only in the fork. Use `merge` to keep fork commits while adding upstream history, or `reset` only when you intentionally want the fork branch to match upstream exactly.
 
 ## Usage
 
@@ -53,7 +53,7 @@ To preview a sync without changing the branch, add `dry-run: 'true'`.
 | `upstream-repository` | detected fork parent | Upstream repository in `owner/repo` form. |
 | `upstream-branch` | upstream default branch | Branch to read from upstream. |
 | `target-branch` | fork default branch | Branch to update in the fork. |
-| `strategy` | `fast-forward` | `fast-forward` fails on divergence; `reset` overwrites the fork branch. |
+| `strategy` | `fast-forward` | `fast-forward` fails on divergence; `merge` creates a merge commit; `reset` overwrites the fork branch. |
 | `dry-run` | `false` | Resolve and validate without updating the branch. |
 
 ## Outputs

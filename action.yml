@@ -1,6 +1,6 @@
 name: 'Krabs Fork Sync'
 author: 'KrabsWong'
-description: 'Sync a fork branch from upstream with a dependency-free, fast-forward-only GitHub Action.'
+description: 'Sync a fork branch from upstream with a dependency-free GitHub Action.'
 
 inputs:
   token:
@@ -24,7 +24,7 @@ inputs:
     required: false
     default: ''
   strategy:
-    description: 'fast-forward refuses divergent branches; reset overwrites them with upstream.'
+    description: 'fast-forward refuses divergent branches; merge creates a merge commit; reset overwrites them.'
     required: false
     default: 'fast-forward'
   dry-run:
@@ -38,7 +38,7 @@ outputs:
   previous-sha:
     description: 'Fork branch commit before the action ran.'
   sha:
-    description: 'Fork branch commit after the action ran, or the upstream commit in dry-run mode.'
+    description: 'Fork branch commit after the action ran, or the target upstream commit in dry-run mode.'
   upstream-sha:
     description: 'Upstream branch commit used as the sync source.'
   strategy:
