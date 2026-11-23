@@ -1,0 +1,53 @@
+name: 'Krabs Fork Sync'
+author: 'KrabsWong'
+description: 'Sync a fork branch from upstream with a dependency-free, fast-forward-only GitHub Action.'
+
+inputs:
+  token:
+    description: 'Token with contents: write on the fork. Also needs read access when the upstream is private.'
+    required: false
+    default: '${{ github.token }}'
+  repository:
+    description: 'Fork repository in owner/repo form. Defaults to the repository running the workflow.'
+    required: false
+    default: ''
+  upstream-repository:
+    description: 'Upstream repository in owner/repo form. Defaults to the fork parent detected by GitHub.'
+    required: false
+    default: ''
+  upstream-branch:
+    description: 'Branch to read from upstream. Defaults to the upstream default branch.'
+    required: false
+    default: ''
+  target-branch:
+    description: 'Branch to update in the fork. Defaults to the fork default branch.'
+    required: false
+    default: ''
+  strategy:
+    description: 'fast-forward refuses divergent branches; reset overwrites them with upstream.'
+    required: false
+    default: 'fast-forward'
+  dry-run:
+    description: 'Resolve and validate everything without changing the fork branch.'
+    required: false
+    default: 'false'
+
+outputs:
+  updated:
+    description: 'true when the fork branch was updated.'
+  previous-sha:
+    description: 'Fork branch commit before the action ran.'
+  sha:
+    description: 'Fork branch commit after the action ran, or the upstream commit in dry-run mode.'
+  upstream-sha:
+    description: 'Upstream branch commit used as the sync source.'
+  strategy:
+    description: 'Strategy used for the sync.'
+
+runs:
+  using: 'node24'
+  main: 'index.js'
+
+branding:
+  icon: 'git-pull-request'
+  color: 'green'

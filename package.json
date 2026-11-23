@@ -1,0 +1,12 @@
+{
+  "name": "krabs-fork-sync",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Dependency-free GitHub Action for syncing a fork branch from upstream.",
+  "scripts": {
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}
