@@ -74,6 +74,9 @@ function setup(t, options = {}) {
     ) {
       return jsonResponse({ ref: 'refs/heads/main' });
     }
+    if (target === 'https://api.github.com/repos/me/fork/merges' && method === 'POST') {
+      return jsonResponse({ sha: options.mergeSha || 'merge-sha' });
+    }
     throw new Error(`Unexpected request: ${method} ${target}`);
   };
 
@@ -141,6 +144,22 @@ test('reset explicitly overwrites the fork branch without a compare request', as
   assert.equal(env.requests.some((request) => request.target.includes('/compare/')), false);
   const patch = env.requests.find((request) => request.method === 'PATCH');
   assert.deepEqual(patch.body, { sha: 'upstream-sha', force: true });
+});
+
+test('merge keeps fork commits and creates a merge commit', async (t) => {
+  const env = setup(t, { strategy: 'merge', behindBy: 1, compareStatus: 'diverged' });
+
+  const result = await run();
+
+  assert.equal(result.updated, 'true');
+  assert.equal(result.sha, 'merge-sha');
+  assert.equal(env.requests.some((request) => request.target.includes('/compare/')), false);
+  const post = env.requests.find((request) => request.method === 'POST');
+  assert.deepEqual(post.body, {
+    base: 'main',
+    head: 'upstream-sha',
+    commit_message: 'Merge upstream into main',
+  });
 });
 
 test('dry run validates the update without changing the branch', async (t) => {
