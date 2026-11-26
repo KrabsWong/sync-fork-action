@@ -198,11 +198,14 @@ function mockGit(t, gitCalls, rebasedSha = 'rebased-sha') {
     if (args.includes('rev-parse') && args.at(-1) === 'HEAD') stdout = rebasedSha;
     else if (args.includes('rev-list')) stdout = 'rebased-commit-sha';
     else if (args.includes('diff-tree')) {
-      stdout = ':100644 100644 ' + '0'.repeat(40) + ' ' + '1'.repeat(40) + ' M\0.github/workflows/check.yml\0';
+      stdout =
+        ':100644 100644 ' + '0'.repeat(40) + ' ' + '1'.repeat(40) + ' M\0.github/workflows/check.yml\0' +
+        ':100644 100644 ' + '0'.repeat(40) + ' ' + '2'.repeat(40) + ' M\0README.md\0';
     } else if (args.includes('show') && args.includes('--format=%B')) stdout = 'Replayed commit\n';
     else if (args.includes('show') && args.includes('--format=%an%n%ae%n%aI')) {
       stdout = 'Test User\nuser@example.com\n2026-11-26T00:00:00Z';
     } else if (args.includes('rev-parse') && args.at(-1) === 'upstream-sha^{tree}') stdout = 'upstream-tree';
+    else if (args.includes('rev-parse') && args.at(-1) === 'fork-sha^{tree}') stdout = 'fork-tree';
     else if (args.includes('rev-parse') && args.at(-1).endsWith('^{tree}')) stdout = 'rebased-tree';
     else if (args.includes('rev-parse')) stdout = 'upstream-sha';
     callback(null, stdout, '');
@@ -230,6 +233,9 @@ test('rebase replays fork commits onto upstream via the Git Data API', async (t)
   assert.ok(env.requests.some((request) => request.target.endsWith('/git/blobs')));
   assert.ok(env.requests.some((request) => request.target.endsWith('/git/trees')));
   assert.ok(env.requests.some((request) => request.target.endsWith('/git/commits')));
+  const commitPost = env.requests.find((request) => request.target.endsWith('/git/commits'));
+  assert.equal(commitPost.body.tree, 'created-tree-sha');
+  assert.deepEqual(commitPost.body.parents, ['upstream-sha']);
   assert.ok(
     gitCalls.some(
       (args) => args.includes('fetch') && args.includes('upstream') && args.includes('main'),
