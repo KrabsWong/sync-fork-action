@@ -243,6 +243,7 @@ test('rebase replays fork commits onto upstream via the Git Data API', async (t)
     ),
   );
   assert.ok(gitCalls.some((args) => args.includes('rebase') && args.includes('upstream-sha')));
+  assert.ok(gitCalls.some((args) => args.includes('clone') && args.includes('--filter=blob:none')));
   assert.equal(gitCalls.some((args) => args.includes('push')), false);
   const patch = env.requests.find((request) => request.method === 'PATCH');
   assert.deepEqual(patch.body, { sha: 'created-commit-sha', force: true });
