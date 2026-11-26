@@ -24,7 +24,7 @@ inputs:
     required: false
     default: ''
   strategy:
-    description: 'fast-forward refuses divergent branches; merge creates a merge commit; rebase replays fork commits onto upstream; reset overwrites them.'
+    description: 'fast-forward refuses divergent branches; merge creates a merge commit; rebase replays fork commits; rebase-squash puts fork content in one commit on upstream; reset overwrites.'
     required: false
     default: 'fast-forward'
   rebase-conflict:
