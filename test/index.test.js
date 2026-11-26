@@ -195,6 +195,10 @@ function mockGit(t, gitCalls, rebasedSha = 'rebased-sha') {
       callback(null, Buffer.from('changed content'), '');
       return;
     }
+    if (args.includes('commit-tree')) {
+      callback(null, 'created-commit-sha', '');
+      return;
+    }
     let stdout = '';
     if (args.includes('rev-parse') && args.at(-1) === 'HEAD') stdout = rebasedSha;
     else if (args.includes('rev-list')) stdout = 'rebased-commit-sha';
@@ -283,11 +287,10 @@ test('rebase-squash creates one commit with upstream as parent', async (t) => {
 
   assert.equal(result.updated, 'true');
   assert.equal(result.sha, 'created-commit-sha');
-  const commitPost = env.requests.find((request) => request.target.endsWith('/git/commits'));
-  assert.equal(commitPost.body.message, 'Rebase fork contents onto upstream');
-  assert.deepEqual(commitPost.body.parents, ['upstream-sha']);
-  const patch = env.requests.find((request) => request.method === 'PATCH');
-  assert.deepEqual(patch.body, { sha: 'created-commit-sha', force: true });
+  assert.equal(env.requests.some((request) => request.method === 'POST'), false);
+  assert.equal(env.requests.some((request) => request.method === 'PATCH'), false);
+  assert.ok(gitCalls.some((args) => args.includes('merge') && args.includes('theirs')));
+  assert.ok(gitCalls.some((args) => args.includes('push') && args.includes('--force-with-lease=refs/heads/main:fork-sha')));
 });
 
 test('rebase skips the push when the fork commits are already on upstream', async (t) => {
