@@ -79,6 +79,15 @@ function setup(t, options = {}) {
       const sha = options.mergeSha === null ? null : options.mergeSha || 'merge-sha';
       return jsonResponse(sha ? { sha } : null, options.mergeResponseStatus || 200);
     }
+    if (target === 'https://api.github.com/repos/me/fork/git/blobs' && method === 'POST') {
+      return jsonResponse({ sha: 'uploaded-blob-sha' }, 201);
+    }
+    if (target === 'https://api.github.com/repos/me/fork/git/trees' && method === 'POST') {
+      return jsonResponse({ sha: 'created-tree-sha' }, 201);
+    }
+    if (target === 'https://api.github.com/repos/me/fork/git/commits' && method === 'POST') {
+      return jsonResponse({ sha: 'created-commit-sha' }, 201);
+    }
     throw new Error(`Unexpected request: ${method} ${target}`);
   };
 
@@ -181,7 +190,21 @@ function mockGit(t, gitCalls, rebasedSha = 'rebased-sha') {
   childProcess.execFile = (file, args, options, callback) => {
     assert.equal(file, 'git');
     gitCalls.push(args);
-    const stdout = args.includes('rev-parse') ? rebasedSha : '';
+    if (args.includes('cat-file')) {
+      callback(null, Buffer.from('changed content'), '');
+      return;
+    }
+    let stdout = '';
+    if (args.includes('rev-parse') && args.at(-1) === 'HEAD') stdout = rebasedSha;
+    else if (args.includes('rev-list')) stdout = 'rebased-commit-sha';
+    else if (args.includes('diff-tree')) {
+      stdout = ':100644 100644 ' + '0'.repeat(40) + ' ' + '1'.repeat(40) + ' M\0.github/workflows/check.yml\0';
+    } else if (args.includes('show') && args.includes('--format=%B')) stdout = 'Replayed commit\n';
+    else if (args.includes('show') && args.includes('--format=%an%n%ae%n%aI')) {
+      stdout = 'Test User\nuser@example.com\n2026-11-26T00:00:00Z';
+    } else if (args.includes('rev-parse') && args.at(-1) === 'upstream-sha^{tree}') stdout = 'upstream-tree';
+    else if (args.includes('rev-parse') && args.at(-1).endsWith('^{tree}')) stdout = 'rebased-tree';
+    else if (args.includes('rev-parse')) stdout = 'upstream-sha';
     callback(null, stdout, '');
   };
   t.after(() => {
@@ -189,7 +212,7 @@ function mockGit(t, gitCalls, rebasedSha = 'rebased-sha') {
   });
 }
 
-test('rebase replays fork commits onto upstream and force-pushes with a lease', async (t) => {
+test('rebase replays fork commits onto upstream via the Git Data API', async (t) => {
   const gitCalls = [];
   mockGit(t, gitCalls);
   const env = setup(t, { strategy: 'rebase', behindBy: 1, compareStatus: 'diverged' });
@@ -199,32 +222,29 @@ test('rebase replays fork commits onto upstream and force-pushes with a lease', 
   assert.deepEqual(result, {
     updated: 'true',
     'previous-sha': 'fork-sha',
-    sha: 'rebased-sha',
+    sha: 'created-commit-sha',
     'upstream-sha': 'upstream-sha',
     strategy: 'rebase',
   });
   assert.deepEqual(readOutputs(env.outputPath), result);
-  assert.equal(env.requests.some((request) => request.method === 'POST'), false);
-  assert.equal(env.requests.some((request) => request.method === 'PATCH'), false);
+  assert.ok(env.requests.some((request) => request.target.endsWith('/git/blobs')));
+  assert.ok(env.requests.some((request) => request.target.endsWith('/git/trees')));
+  assert.ok(env.requests.some((request) => request.target.endsWith('/git/commits')));
   assert.ok(
     gitCalls.some(
       (args) => args.includes('fetch') && args.includes('upstream') && args.includes('main'),
     ),
   );
   assert.ok(gitCalls.some((args) => args.includes('rebase') && args.includes('upstream-sha')));
-  const push = gitCalls.find((args) => args.includes('push'));
-  assert.deepEqual(push.slice(-4), [
-    'push',
-    '--force-with-lease=refs/heads/main:fork-sha',
-    'origin',
-    'HEAD:refs/heads/main',
-  ]);
+  assert.equal(gitCalls.some((args) => args.includes('push')), false);
+  const patch = env.requests.find((request) => request.method === 'PATCH');
+  assert.deepEqual(patch.body, { sha: 'created-commit-sha', force: true });
 });
 
 test('rebase dry run validates locally without pushing', async (t) => {
   const gitCalls = [];
   mockGit(t, gitCalls);
-  setup(t, { strategy: 'rebase', dryRun: 'true' });
+  const env = setup(t, { strategy: 'rebase', dryRun: 'true' });
 
   const result = await run();
 
@@ -232,6 +252,8 @@ test('rebase dry run validates locally without pushing', async (t) => {
   assert.equal(result.sha, 'rebased-sha');
   assert.ok(gitCalls.some((args) => args.includes('rebase')));
   assert.equal(gitCalls.some((args) => args.includes('push')), false);
+  assert.equal(env.requests.some((request) => request.method === 'POST'), false);
+  assert.equal(env.requests.some((request) => request.method === 'PATCH'), false);
 });
 
 test('rebase skips the push when the fork commits are already on upstream', async (t) => {
@@ -244,6 +266,8 @@ test('rebase skips the push when the fork commits are already on upstream', asyn
   assert.equal(result.updated, 'false');
   assert.equal(result.sha, 'fork-sha');
   assert.equal(gitCalls.some((args) => args.includes('push')), false);
+  assert.equal(env.requests.some((request) => request.method === 'POST'), false);
+  assert.equal(env.requests.some((request) => request.method === 'PATCH'), false);
   assert.match(fs.readFileSync(env.summaryPath, 'utf8'), /Result: already up to date/);
 });
 
