@@ -300,11 +300,16 @@ async function rebaseForkBranch(options) {
 }
 
 async function squashRebase(options) {
-  const { slug, upstreamSlug, upstreamBranch, upstreamSha, previousSha, directory, env, token } = options;
+  const { slug, upstreamSlug, upstreamBranch, targetBranch, upstreamSha, previousSha, directory, env } = options;
   const server = serverBaseUrl();
 
   await runGit(
     ['clone', '--no-checkout', '--filter=blob:none', `${server}/${encodeSlug(slug)}.git`, directory],
+    env,
+  );
+  await runGit(['-C', directory, 'config', 'user.name', 'github-actions[bot]'], env);
+  await runGit(
+    ['-C', directory, 'config', 'user.email', '41898282+github-actions[bot]@users.noreply.github.com'],
     env,
   );
   await runGit(
@@ -312,42 +317,38 @@ async function squashRebase(options) {
     env,
   );
   await runGit(['-C', directory, 'fetch', '--no-tags', 'upstream', upstreamBranch], env);
-
-  const baseTree = await runGit(['-C', directory, 'rev-parse', `${previousSha}^{tree}`], env);
-  const rawDiff = await runGit(
-    ['-C', directory, 'diff-tree', '-r', '--raw', '--no-commit-id', '-z', previousSha, upstreamSha],
+  await runGit(['-C', directory, 'checkout', '--detach', previousSha], env);
+  await runGit(
+    ['-C', directory, 'merge', '--no-commit', '--no-ff', '-X', 'theirs', upstreamSha],
     env,
   );
-  const entries = parseRawDiff(rawDiff, true);
-  for (const entry of entries) {
-    if (entry.sha === null || entry.type !== 'blob') continue;
-    const content = await execGit(['-C', directory, 'cat-file', 'blob', entry.sha], env, 'buffer');
-    const uploaded = await createBlob(slug, Buffer.from(content).toString('base64'), token);
-    if (!uploaded.sha) throw new Error(`GitHub API did not return a blob SHA for ${entry.path}.`);
-    entry.sha = uploaded.sha;
-  }
-
-  let tree = baseTree;
-  if (entries.length > 0) {
-    const createdTree = await createTree(slug, baseTree, entries, token);
-    if (!createdTree.sha) throw new Error('GitHub API did not return a tree SHA.');
-    tree = createdTree.sha;
-  }
-
-  const createdCommit = await createCommit(
-    slug,
-    'Rebase fork contents onto upstream',
-    tree,
-    upstreamSha,
-    {
-      name: 'github-actions[bot]',
-      email: '41898282+github-actions[bot]@users.noreply.github.com',
-      date: new Date().toISOString(),
-    },
-    token,
+  await runGit(['-C', directory, 'checkout', previousSha, '--', '.github/workflows'], env);
+  const tree = await runGit(['-C', directory, 'write-tree'], env);
+  const commit = await runGit(
+    [
+      '-C',
+      directory,
+      'commit-tree',
+      tree,
+      '-p',
+      upstreamSha,
+      '-m',
+      'Rebase fork contents onto upstream',
+    ],
+    env,
   );
-  if (!createdCommit.sha) throw new Error('GitHub API did not return a commit SHA.');
-  return createdCommit.sha;
+  await runGit(
+    [
+      '-C',
+      directory,
+      'push',
+      `--force-with-lease=refs/heads/${targetBranch}:${previousSha}`,
+      'origin',
+      `${commit}:refs/heads/${targetBranch}`,
+    ],
+    env,
+  );
+  return commit;
 }
 
 async function compareCommits(slug, previousSha, upstreamSha, token) {
@@ -496,13 +497,12 @@ async function run() {
           slug: forkSlug,
           upstreamSlug,
           upstreamBranch,
+          targetBranch,
           upstreamSha,
           previousSha,
           directory,
           env: gitEnv(token),
-          token,
         });
-        await setBranchSha(forkSlug, targetBranch, resultSha, true, token);
         updated = true;
         log(`Squash-rebased ${targetBranch} onto upstream (${resultSha}).`);
       } finally {
