@@ -109,6 +109,21 @@ function createGitMerge(slug, base, head, message, token) {
   });
 }
 
+function createBlob(slug, content, token) {
+  const path = `/repos/${encodeSlug(slug)}/git/blobs`;
+  return request('POST', path, token, { content, encoding: 'base64' });
+}
+
+function createTree(slug, baseTree, entries, token) {
+  const path = `/repos/${encodeSlug(slug)}/git/trees`;
+  return request('POST', path, token, { base_tree: baseTree, tree: entries });
+}
+
+function createCommit(slug, message, tree, parent, author, token) {
+  const path = `/repos/${encodeSlug(slug)}/git/commits`;
+  return request('POST', path, token, { message, tree, parents: [parent], author });
+}
+
 function gitEnv(token) {
   const authorization = `AUTHORIZATION: basic ${Buffer.from(`x-access-token:${token}`).toString('base64')}`;
   return {
@@ -120,17 +135,89 @@ function gitEnv(token) {
   };
 }
 
-function runGit(args, env) {
+function execGit(args, env, encoding = 'utf8') {
   return new Promise((resolve, reject) => {
-    childProcess.execFile('git', args, { env, maxBuffer: 10 * 1024 * 1024 }, (error, stdout, stderr) => {
+    childProcess.execFile('git', args, { env, encoding, maxBuffer: 10 * 1024 * 1024 }, (error, stdout, stderr) => {
       if (error) {
         const detail = String(stderr || stdout || error.message).trim().replaceAll('\n', ' ');
         reject(new Error(`git ${args.join(' ')} failed: ${detail}`));
         return;
       }
-      resolve(String(stdout).trim());
+      resolve(stdout);
     });
   });
+}
+
+function runGit(args, env) {
+  return execGit(args, env).then((output) => String(output).trim());
+}
+
+function parseRawDiff(raw) {
+  const parts = String(raw).split('\0').filter(Boolean);
+  const entries = [];
+  for (let index = 0; index < parts.length; index += 2) {
+    const header = parts[index];
+    const filePath = parts[index + 1];
+    const match = /^:(\d{6}) (\d{6}) [0-9a-f]{40} ([0-9a-f]{40}) [A-Z]/.exec(header);
+    if (!match || !filePath) throw new Error(`Cannot parse git diff entry: ${header}`);
+    const [, oldMode, newMode, sha] = match;
+    if (newMode === '000000') {
+      entries.push({ path: filePath, mode: oldMode, type: 'blob', sha: null });
+    } else {
+      entries.push({ path: filePath, mode: newMode, type: newMode === '160000' ? 'commit' : 'blob', sha });
+    }
+  }
+  return entries;
+}
+
+async function commitRebasedHistory(options) {
+  const { slug, directory, upstreamSha, rebasedSha, env, token } = options;
+  const blobCache = new Map();
+  const upstreamTree = await runGit(['-C', directory, 'rev-parse', `${upstreamSha}^{tree}`], env);
+  const commits = (await runGit(['-C', directory, 'rev-list', '--reverse', `${upstreamSha}..${rebasedSha}`], env))
+    .split('\n')
+    .map((sha) => sha.trim())
+    .filter(Boolean);
+
+  let baseTree = upstreamTree;
+  let parent = upstreamSha;
+  for (const commitSha of commits) {
+    const localParent = await runGit(['-C', directory, 'rev-parse', `${commitSha}^`], env);
+    const rawDiff = await runGit(
+      ['-C', directory, 'diff-tree', '-r', '--raw', '--no-commit-id', '-z', localParent, commitSha],
+      env,
+    );
+    const entries = parseRawDiff(rawDiff);
+    for (const entry of entries) {
+      if (entry.sha === null || entry.type !== 'blob') continue;
+      if (!blobCache.has(entry.sha)) {
+        const content = await execGit(['-C', directory, 'cat-file', 'blob', entry.sha], env, 'buffer');
+        const uploaded = await createBlob(slug, Buffer.from(content).toString('base64'), token);
+        if (!uploaded.sha) throw new Error(`GitHub API did not return a blob SHA for ${entry.path}.`);
+        blobCache.set(entry.sha, uploaded.sha);
+      }
+      entry.sha = blobCache.get(entry.sha);
+    }
+
+    if (entries.length > 0) {
+      const createdTree = await createTree(slug, baseTree, entries, token);
+      if (!createdTree.sha) throw new Error('GitHub API did not return a tree SHA.');
+      baseTree = createdTree.sha;
+    }
+
+    const message = await runGit(['-C', directory, 'show', '-s', '--format=%B', commitSha], env);
+    const authorParts = (await runGit(['-C', directory, 'show', '-s', '--format=%an%n%ae%n%aI', commitSha], env)).split('\n');
+    const author = {
+      name: authorParts[0] || 'github-actions[bot]',
+      email: authorParts[1] || '41898282+github-actions[bot]@users.noreply.github.com',
+      ...(authorParts[2] ? { date: authorParts[2] } : {}),
+    };
+    const createdCommit = await createCommit(slug, message.trimEnd(), baseTree, parent, author, token);
+    if (!createdCommit.sha) throw new Error('GitHub API did not return a commit SHA.');
+    parent = createdCommit.sha;
+  }
+
+  return parent;
 }
 
 async function rebaseForkBranch(options) {
@@ -165,17 +252,16 @@ async function rebaseForkBranch(options) {
     const rebasedSha = await runGit(['-C', directory, 'rev-parse', 'HEAD'], env);
 
     if (!dryRun && rebasedSha !== previousSha) {
-      await runGit(
-        [
-          '-C',
-          directory,
-          'push',
-          `--force-with-lease=refs/heads/${targetBranch}:${previousSha}`,
-          'origin',
-          `HEAD:refs/heads/${targetBranch}`,
-        ],
+      const resultSha = await commitRebasedHistory({
+        slug: forkSlug,
+        directory,
+        upstreamSha,
+        rebasedSha,
         env,
-      );
+        token,
+      });
+      await setBranchSha(forkSlug, targetBranch, resultSha, true, token);
+      return resultSha;
     }
 
     return rebasedSha;
