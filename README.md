@@ -10,7 +10,7 @@ The default `fast-forward` strategy refuses to overwrite commits that exist only
 
 For frequently regenerated data, set `rebase-conflict: prefer-upstream` to let conflicting hunks take the upstream version while still preserving the fork's workflow files.
 
-For forks with hundreds of unique commits, use `rebase-squash` to put the fork's current content into one commit whose parent is upstream. It preserves the fork tree, including workflow files, without replaying every commit.
+For forks with hundreds of unique commits, use `rebase-squash` to put the fork's current content into one commit whose parent is upstream. It preserves the fork tree, including workflow files, without replaying every commit. The commit is pushed with local git and force-with-lease, so it does not consume GitHub API blob-upload rate limits.
 
 ## Usage
 
@@ -32,7 +32,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Sync default branch from upstream
-        uses: KrabsWong/sync-fork-action@v1.2.6
+        uses: KrabsWong/sync-fork-action@v1.2.7
         id: sync
         with:
           strategy: rebase
@@ -83,7 +83,7 @@ The repository itself must be public, contain exactly one `action.yml` or `actio
 2. Open `action.yml` on GitHub and use the **Draft a release** banner, or open **Releases** and choose **Draft a new release**.
 3. Select **Publish this action to the GitHub Marketplace**. The first time, the repository owner must accept the GitHub Marketplace Developer Agreement; publishing also requires two-factor authentication.
 4. Fix any metadata warnings GitHub shows, choose a primary category, enter a version tag such as `v1`, and publish the release.
-5. For later releases, move the `v1` tag to the reviewed commit and create a new immutable release tag such as `v1.2.6`.
+5. For later releases, move the `v1` tag to the reviewed commit and create a new immutable release tag such as `v1.2.7`.
 
 GitHub does not review Marketplace actions before listing them. Consumers should pin actions to a commit SHA or a major release tag after reviewing the source.
 
