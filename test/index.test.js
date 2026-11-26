@@ -213,10 +213,9 @@ test('rebase replays fork commits onto upstream and force-pushes with a lease', 
   );
   assert.ok(gitCalls.some((args) => args.includes('rebase') && args.includes('upstream-sha')));
   const push = gitCalls.find((args) => args.includes('push'));
-  assert.deepEqual(push.slice(-5), [
+  assert.deepEqual(push.slice(-4), [
     'push',
-    '--force-with-lease',
-    'refs/heads/main:fork-sha',
+    '--force-with-lease=refs/heads/main:fork-sha',
     'origin',
     'HEAD:refs/heads/main',
   ]);
