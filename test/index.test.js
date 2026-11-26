@@ -33,6 +33,7 @@ function setup(t, options = {}) {
     'INPUT_UPSTREAM-BRANCH': options.upstreamBranch || '',
     'INPUT_TARGET-BRANCH': options.targetBranch || '',
     INPUT_STRATEGY: options.strategy || 'fast-forward',
+    'INPUT_REBASE-CONFLICT': options.rebaseConflict || 'fail',
     'INPUT_DRY-RUN': options.dryRun || 'false',
     GITHUB_REPOSITORY: 'me/fork',
     GITHUB_OUTPUT: outputPath,
@@ -260,6 +261,16 @@ test('rebase dry run validates locally without pushing', async (t) => {
   assert.equal(gitCalls.some((args) => args.includes('push')), false);
   assert.equal(env.requests.some((request) => request.method === 'POST'), false);
   assert.equal(env.requests.some((request) => request.method === 'PATCH'), false);
+});
+
+test('rebase can prefer upstream for conflicting hunks', async (t) => {
+  const gitCalls = [];
+  mockGit(t, gitCalls);
+  setup(t, { strategy: 'rebase', rebaseConflict: 'prefer-upstream' });
+
+  await run();
+
+  assert.ok(gitCalls.some((args) => args.includes('--strategy-option=theirs')));
 });
 
 test('rebase skips the push when the fork commits are already on upstream', async (t) => {
