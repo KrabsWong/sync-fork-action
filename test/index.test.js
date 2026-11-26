@@ -2,6 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const childProcess = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -74,8 +75,9 @@ function setup(t, options = {}) {
     ) {
       return jsonResponse({ ref: 'refs/heads/main' });
     }
-    if (target === 'https://api.github.com/repos/me/fork/merges' && method === 'POST') {
-      return jsonResponse({ sha: options.mergeSha || 'merge-sha' });
+    if (target === 'https://api.github.com/repos/me/fork/git/merges' && method === 'POST') {
+      const sha = options.mergeSha === null ? null : options.mergeSha || 'merge-sha';
+      return jsonResponse(sha ? { sha } : null, options.mergeResponseStatus || 200);
     }
     throw new Error(`Unexpected request: ${method} ${target}`);
   };
@@ -154,12 +156,96 @@ test('merge keeps fork commits and creates a merge commit', async (t) => {
   assert.equal(result.updated, 'true');
   assert.equal(result.sha, 'merge-sha');
   assert.equal(env.requests.some((request) => request.target.includes('/compare/')), false);
-  const post = env.requests.find((request) => request.method === 'POST');
+  const post = env.requests.find((request) => request.target.endsWith('/git/merges'));
   assert.deepEqual(post.body, {
-    base: 'main',
+    base: 'fork-sha',
     head: 'upstream-sha',
     commit_message: 'Merge upstream into main',
   });
+  const patch = env.requests.find((request) => request.method === 'PATCH');
+  assert.deepEqual(patch.body, { sha: 'merge-sha', force: false });
+});
+
+test('merge treats an already merged head as a no-op', async (t) => {
+  const env = setup(t, { strategy: 'merge', mergeSha: null, mergeResponseStatus: 204 });
+
+  const result = await run();
+
+  assert.equal(result.updated, 'false');
+  assert.equal(result.sha, 'fork-sha');
+  assert.equal(env.requests.some((request) => request.method === 'PATCH'), false);
+});
+
+function mockGit(t, gitCalls, rebasedSha = 'rebased-sha') {
+  const originalExecFile = childProcess.execFile;
+  childProcess.execFile = (file, args, options, callback) => {
+    assert.equal(file, 'git');
+    gitCalls.push(args);
+    const stdout = args.includes('rev-parse') ? rebasedSha : '';
+    callback(null, stdout, '');
+  };
+  t.after(() => {
+    childProcess.execFile = originalExecFile;
+  });
+}
+
+test('rebase replays fork commits onto upstream and force-pushes with a lease', async (t) => {
+  const gitCalls = [];
+  mockGit(t, gitCalls);
+  const env = setup(t, { strategy: 'rebase', behindBy: 1, compareStatus: 'diverged' });
+
+  const result = await run();
+
+  assert.deepEqual(result, {
+    updated: 'true',
+    'previous-sha': 'fork-sha',
+    sha: 'rebased-sha',
+    'upstream-sha': 'upstream-sha',
+    strategy: 'rebase',
+  });
+  assert.deepEqual(readOutputs(env.outputPath), result);
+  assert.equal(env.requests.some((request) => request.method === 'POST'), false);
+  assert.equal(env.requests.some((request) => request.method === 'PATCH'), false);
+  assert.ok(
+    gitCalls.some(
+      (args) => args.includes('fetch') && args.includes('upstream') && args.includes('main'),
+    ),
+  );
+  assert.ok(gitCalls.some((args) => args.includes('rebase') && args.includes('upstream-sha')));
+  const push = gitCalls.find((args) => args.includes('push'));
+  assert.deepEqual(push.slice(-5), [
+    'push',
+    '--force-with-lease',
+    'refs/heads/main:fork-sha',
+    'origin',
+    'HEAD:refs/heads/main',
+  ]);
+});
+
+test('rebase dry run validates locally without pushing', async (t) => {
+  const gitCalls = [];
+  mockGit(t, gitCalls);
+  setup(t, { strategy: 'rebase', dryRun: 'true' });
+
+  const result = await run();
+
+  assert.equal(result.updated, 'false');
+  assert.equal(result.sha, 'rebased-sha');
+  assert.ok(gitCalls.some((args) => args.includes('rebase')));
+  assert.equal(gitCalls.some((args) => args.includes('push')), false);
+});
+
+test('rebase skips the push when the fork commits are already on upstream', async (t) => {
+  const gitCalls = [];
+  mockGit(t, gitCalls, 'fork-sha');
+  const env = setup(t, { strategy: 'rebase' });
+
+  const result = await run();
+
+  assert.equal(result.updated, 'false');
+  assert.equal(result.sha, 'fork-sha');
+  assert.equal(gitCalls.some((args) => args.includes('push')), false);
+  assert.match(fs.readFileSync(env.summaryPath, 'utf8'), /Result: already up to date/);
 });
 
 test('dry run validates the update without changing the branch', async (t) => {

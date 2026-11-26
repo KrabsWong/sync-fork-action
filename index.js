@@ -1,9 +1,13 @@
 'use strict';
 
+const childProcess = require('node:child_process');
 const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 
 const DEFAULT_API_URL = 'https://api.github.com';
-const VALID_STRATEGIES = new Set(['fast-forward', 'merge', 'reset']);
+const DEFAULT_SERVER_URL = 'https://github.com';
+const VALID_STRATEGIES = new Set(['fast-forward', 'merge', 'rebase', 'reset']);
 
 function log(message) {
   process.stdout.write(`${message}\n`);
@@ -38,6 +42,10 @@ function encodeSlug(slug) {
 
 function apiBaseUrl() {
   return (process.env.GITHUB_API_URL || DEFAULT_API_URL).replace(/\/+$/, '');
+}
+
+function serverBaseUrl() {
+  return (process.env.GITHUB_SERVER_URL || DEFAULT_SERVER_URL).replace(/\/+$/, '');
 }
 
 async function request(method, path, token, body) {
@@ -92,13 +100,89 @@ function setBranchSha(slug, branch, sha, force, token) {
   return request('PATCH', path, token, { sha, force });
 }
 
-function mergeUpstream(slug, targetBranch, upstreamSha, token) {
-  const path = `/repos/${encodeSlug(slug)}/merges`;
+function createGitMerge(slug, base, head, message, token) {
+  const path = `/repos/${encodeSlug(slug)}/git/merges`;
   return request('POST', path, token, {
-    base: targetBranch,
-    head: upstreamSha,
-    commit_message: `Merge upstream into ${targetBranch}`,
+    base,
+    head,
+    commit_message: message,
   });
+}
+
+function gitEnv(token) {
+  const authorization = `AUTHORIZATION: basic ${Buffer.from(`x-access-token:${token}`).toString('base64')}`;
+  return {
+    ...process.env,
+    GIT_TERMINAL_PROMPT: '0',
+    GIT_CONFIG_COUNT: '1',
+    GIT_CONFIG_KEY_0: 'http.extraheader',
+    GIT_CONFIG_VALUE_0: authorization,
+  };
+}
+
+function runGit(args, env) {
+  return new Promise((resolve, reject) => {
+    childProcess.execFile('git', args, { env, maxBuffer: 10 * 1024 * 1024 }, (error, stdout, stderr) => {
+      if (error) {
+        const detail = String(stderr || stdout || error.message).trim().replaceAll('\n', ' ');
+        reject(new Error(`git ${args.join(' ')} failed: ${detail}`));
+        return;
+      }
+      resolve(String(stdout).trim());
+    });
+  });
+}
+
+async function rebaseForkBranch(options) {
+  const {
+    forkSlug,
+    upstreamSlug,
+    upstreamBranch,
+    targetBranch,
+    upstreamSha,
+    previousSha,
+    token,
+    dryRun,
+  } = options;
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'krabs-fork-sync-'));
+  const env = gitEnv(token);
+  const server = serverBaseUrl();
+
+  try {
+    await runGit(['clone', '--no-checkout', `${server}/${encodeSlug(forkSlug)}.git`, directory], env);
+    await runGit(['-C', directory, 'config', 'user.name', 'github-actions[bot]'], env);
+    await runGit(
+      ['-C', directory, 'config', 'user.email', '41898282+github-actions[bot]@users.noreply.github.com'],
+      env,
+    );
+    await runGit(
+      ['-C', directory, 'remote', 'add', 'upstream', `${server}/${encodeSlug(upstreamSlug)}.git`],
+      env,
+    );
+    await runGit(['-C', directory, 'fetch', '--no-tags', 'upstream', upstreamBranch], env);
+    await runGit(['-C', directory, 'checkout', '--detach', previousSha], env);
+    await runGit(['-C', directory, 'rebase', upstreamSha], env);
+    const rebasedSha = await runGit(['-C', directory, 'rev-parse', 'HEAD'], env);
+
+    if (!dryRun && rebasedSha !== previousSha) {
+      await runGit(
+        [
+          '-C',
+          directory,
+          'push',
+          '--force-with-lease',
+          `refs/heads/${targetBranch}:${previousSha}`,
+          'origin',
+          `HEAD:refs/heads/${targetBranch}`,
+        ],
+        env,
+      );
+    }
+
+    return rebasedSha;
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
 }
 
 async function compareCommits(slug, previousSha, upstreamSha, token) {
@@ -136,7 +220,7 @@ async function run() {
   const strategy = getInput('strategy', 'fast-forward');
   if (!VALID_STRATEGIES.has(strategy)) {
     throw new Error(
-      `Input "strategy" must be fast-forward, merge or reset, received "${strategy}".`,
+      `Input "strategy" must be fast-forward, merge, rebase or reset, received "${strategy}".`,
     );
   }
   const dryRun = getBooleanInput('dry-run', false);
@@ -193,8 +277,15 @@ async function run() {
     if (dryRun) {
       log('Dry run: would merge upstream into the fork branch.');
     } else {
-      const merge = await mergeUpstream(forkSlug, targetBranch, upstreamSha, token);
+      const merge = await createGitMerge(
+        forkSlug,
+        previousSha,
+        upstreamSha,
+        `Merge upstream into ${targetBranch}`,
+        token,
+      );
       if (merge && merge.sha) {
+        await setBranchSha(forkSlug, targetBranch, merge.sha, false, token);
         resultSha = merge.sha;
         updated = true;
         log(`Merged upstream into ${targetBranch} (${resultSha}).`);
@@ -202,6 +293,25 @@ async function run() {
         resultSha = previousSha;
         log('Already up to date.');
       }
+    }
+  } else if (strategy === 'rebase') {
+    resultSha = await rebaseForkBranch({
+      forkSlug,
+      upstreamSlug,
+      upstreamBranch,
+      targetBranch,
+      upstreamSha,
+      previousSha,
+      token,
+      dryRun,
+    });
+    if (resultSha === previousSha) {
+      log('Already up to date.');
+    } else if (dryRun) {
+      log(`Dry run: would rebase ${targetBranch} onto upstream (${resultSha}).`);
+    } else {
+      updated = true;
+      log(`Rebased ${targetBranch} onto upstream (${resultSha}).`);
     }
   } else if (dryRun) {
     log('Dry run: would reset the fork branch to upstream.');
