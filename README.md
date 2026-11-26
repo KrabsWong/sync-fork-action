@@ -8,6 +8,8 @@ The default `fast-forward` strategy refuses to overwrite commits that exist only
 
 `rebase` rewrites the fork-only commits and writes them with the GitHub Git Data API, then force-updates the target branch ref. It works with `contents: write` alone and does not need the unavailable `workflows` permission. Because the default `GITHUB_TOKEN` cannot write workflow files, `.github/workflows` keeps the fork's current content during a rebase. Do not use it when other people rely on the existing fork branch commits or have open pull requests based on them.
 
+For frequently regenerated data, set `rebase-conflict: prefer-upstream` to let conflicting hunks take the upstream version while still preserving the fork's workflow files.
+
 ## Usage
 
 Run this workflow in the fork repository.
@@ -28,7 +30,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Sync default branch from upstream
-        uses: KrabsWong/sync-fork-action@v1.2.3
+        uses: KrabsWong/sync-fork-action@v1.2.4
         id: sync
         with:
           strategy: rebase
@@ -58,6 +60,7 @@ To preview a sync without changing the branch, add `dry-run: 'true'`.
 | `upstream-branch` | upstream default branch | Branch to read from upstream. |
 | `target-branch` | fork default branch | Branch to update in the fork. |
 | `strategy` | `fast-forward` | `fast-forward` fails on divergence; `merge` creates a merge commit; `rebase` replays fork commits onto upstream; `reset` overwrites the fork branch. |
+| `rebase-conflict` | `fail` | With `rebase`, `prefer-upstream` resolves conflicting hunks in favor of upstream. |
 | `dry-run` | `false` | Resolve and validate without updating the branch. |
 
 ## Outputs
@@ -78,7 +81,7 @@ The repository itself must be public, contain exactly one `action.yml` or `actio
 2. Open `action.yml` on GitHub and use the **Draft a release** banner, or open **Releases** and choose **Draft a new release**.
 3. Select **Publish this action to the GitHub Marketplace**. The first time, the repository owner must accept the GitHub Marketplace Developer Agreement; publishing also requires two-factor authentication.
 4. Fix any metadata warnings GitHub shows, choose a primary category, enter a version tag such as `v1`, and publish the release.
-5. For later releases, move the `v1` tag to the reviewed commit and create a new immutable release tag such as `v1.2.3`.
+5. For later releases, move the `v1` tag to the reviewed commit and create a new immutable release tag such as `v1.2.4`.
 
 GitHub does not review Marketplace actions before listing them. Consumers should pin actions to a commit SHA or a major release tag after reviewing the source.
 
