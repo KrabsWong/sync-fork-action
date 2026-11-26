@@ -27,6 +27,10 @@ inputs:
     description: 'fast-forward refuses divergent branches; merge creates a merge commit; rebase replays fork commits onto upstream; reset overwrites them.'
     required: false
     default: 'fast-forward'
+  rebase-conflict:
+    description: 'For rebase, fail on conflicts or prefer the upstream side of a conflicting hunk.'
+    required: false
+    default: 'fail'
   dry-run:
     description: 'Resolve and validate everything without changing the fork branch.'
     required: false
