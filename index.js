@@ -8,6 +8,7 @@ const path = require('node:path');
 const DEFAULT_API_URL = 'https://api.github.com';
 const DEFAULT_SERVER_URL = 'https://github.com';
 const VALID_STRATEGIES = new Set(['fast-forward', 'merge', 'rebase', 'reset']);
+const VALID_REBASE_CONFLICT_MODES = new Set(['fail', 'prefer-upstream']);
 
 function log(message) {
   process.stdout.write(`${message}\n`);
@@ -232,6 +233,7 @@ async function rebaseForkBranch(options) {
     previousSha,
     token,
     dryRun,
+    preferUpstream,
   } = options;
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'krabs-fork-sync-'));
   const env = gitEnv(token);
@@ -250,7 +252,16 @@ async function rebaseForkBranch(options) {
     );
     await runGit(['-C', directory, 'fetch', '--no-tags', 'upstream', upstreamBranch], env);
     await runGit(['-C', directory, 'checkout', '--detach', previousSha], env);
-    await runGit(['-C', directory, 'rebase', upstreamSha], env);
+    await runGit(
+      [
+        '-C',
+        directory,
+        'rebase',
+        ...(preferUpstream ? ['--strategy-option=theirs'] : []),
+        upstreamSha,
+      ],
+      env,
+    );
     const rebasedSha = await runGit(['-C', directory, 'rev-parse', 'HEAD'], env);
 
     if (!dryRun && rebasedSha !== previousSha) {
@@ -312,6 +323,12 @@ async function run() {
     );
   }
   const dryRun = getBooleanInput('dry-run', false);
+  const rebaseConflict = getInput('rebase-conflict', 'fail');
+  if (!VALID_REBASE_CONFLICT_MODES.has(rebaseConflict)) {
+    throw new Error(
+      `Input "rebase-conflict" must be fail or prefer-upstream, received "${rebaseConflict}".`,
+    );
+  }
 
   const fork = await getRepository(forkSlug, token);
   const targetBranch = getInput('target-branch') || fork.default_branch;
@@ -392,6 +409,7 @@ async function run() {
       previousSha,
       token,
       dryRun,
+      preferUpstream: rebaseConflict === 'prefer-upstream',
     });
     if (resultSha === previousSha) {
       log('Already up to date.');
