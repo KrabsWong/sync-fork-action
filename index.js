@@ -152,7 +152,7 @@ function runGit(args, env) {
   return execGit(args, env).then((output) => String(output).trim());
 }
 
-function parseRawDiff(raw) {
+function parseRawDiff(raw, excludeWorkflowFiles = false) {
   const parts = String(raw).split('\0').filter(Boolean);
   const entries = [];
   for (let index = 0; index < parts.length; index += 2) {
@@ -160,6 +160,7 @@ function parseRawDiff(raw) {
     const filePath = parts[index + 1];
     const match = /^:(\d{6}) (\d{6}) [0-9a-f]{40} ([0-9a-f]{40}) [A-Z]/.exec(header);
     if (!match || !filePath) throw new Error(`Cannot parse git diff entry: ${header}`);
+    if (excludeWorkflowFiles && filePath.startsWith('.github/workflows/')) continue;
     const [, oldMode, newMode, sha] = match;
     if (newMode === '000000') {
       entries.push({ path: filePath, mode: oldMode, type: 'blob', sha: null });
@@ -171,23 +172,23 @@ function parseRawDiff(raw) {
 }
 
 async function commitRebasedHistory(options) {
-  const { slug, directory, upstreamSha, rebasedSha, env, token } = options;
+  const { slug, directory, previousSha, upstreamSha, rebasedSha, env, token } = options;
   const blobCache = new Map();
-  const upstreamTree = await runGit(['-C', directory, 'rev-parse', `${upstreamSha}^{tree}`], env);
+  const forkTree = await runGit(['-C', directory, 'rev-parse', `${previousSha}^{tree}`], env);
   const commits = (await runGit(['-C', directory, 'rev-list', '--reverse', `${upstreamSha}..${rebasedSha}`], env))
     .split('\n')
     .map((sha) => sha.trim())
     .filter(Boolean);
 
-  let baseTree = upstreamTree;
+  let baseTree = forkTree;
   let parent = upstreamSha;
+  let previousLocalCommit = previousSha;
   for (const commitSha of commits) {
-    const localParent = await runGit(['-C', directory, 'rev-parse', `${commitSha}^`], env);
     const rawDiff = await runGit(
-      ['-C', directory, 'diff-tree', '-r', '--raw', '--no-commit-id', '-z', localParent, commitSha],
+      ['-C', directory, 'diff-tree', '-r', '--raw', '--no-commit-id', '-z', previousLocalCommit, commitSha],
       env,
     );
-    const entries = parseRawDiff(rawDiff);
+    const entries = parseRawDiff(rawDiff, true);
     for (const entry of entries) {
       if (entry.sha === null || entry.type !== 'blob') continue;
       if (!blobCache.has(entry.sha)) {
@@ -215,6 +216,7 @@ async function commitRebasedHistory(options) {
     const createdCommit = await createCommit(slug, message.trimEnd(), baseTree, parent, author, token);
     if (!createdCommit.sha) throw new Error('GitHub API did not return a commit SHA.');
     parent = createdCommit.sha;
+    previousLocalCommit = commitSha;
   }
 
   return parent;
@@ -255,6 +257,7 @@ async function rebaseForkBranch(options) {
       const resultSha = await commitRebasedHistory({
         slug: forkSlug,
         directory,
+        previousSha,
         upstreamSha,
         rebasedSha,
         env,
