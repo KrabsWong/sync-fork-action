@@ -246,7 +246,16 @@ async function rebaseForkBranch(options) {
   const server = serverBaseUrl();
 
   try {
-    await runGit(['clone', '--no-checkout', `${server}/${encodeSlug(forkSlug)}.git`, directory], env);
+    await runGit(
+      [
+        'clone',
+        '--no-checkout',
+        '--filter=blob:none',
+        `${server}/${encodeSlug(forkSlug)}.git`,
+        directory,
+      ],
+      env,
+    );
     await runGit(['-C', directory, 'config', 'user.name', 'github-actions[bot]'], env);
     await runGit(
       ['-C', directory, 'config', 'user.email', '41898282+github-actions[bot]@users.noreply.github.com'],
@@ -294,7 +303,10 @@ async function squashRebase(options) {
   const { slug, upstreamSlug, upstreamBranch, upstreamSha, previousSha, directory, env, token } = options;
   const server = serverBaseUrl();
 
-  await runGit(['clone', '--no-checkout', `${server}/${encodeSlug(slug)}.git`, directory], env);
+  await runGit(
+    ['clone', '--no-checkout', '--filter=blob:none', `${server}/${encodeSlug(slug)}.git`, directory],
+    env,
+  );
   await runGit(
     ['-C', directory, 'remote', 'add', 'upstream', `${server}/${encodeSlug(upstreamSlug)}.git`],
     env,
