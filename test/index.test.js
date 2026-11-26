@@ -273,6 +273,22 @@ test('rebase can prefer upstream for conflicting hunks', async (t) => {
   assert.ok(gitCalls.some((args) => args.includes('--strategy-option=theirs')));
 });
 
+test('rebase-squash creates one commit with upstream as parent', async (t) => {
+  const gitCalls = [];
+  mockGit(t, gitCalls);
+  const env = setup(t, { strategy: 'rebase-squash' });
+
+  const result = await run();
+
+  assert.equal(result.updated, 'true');
+  assert.equal(result.sha, 'created-commit-sha');
+  const commitPost = env.requests.find((request) => request.target.endsWith('/git/commits'));
+  assert.equal(commitPost.body.message, 'Rebase fork contents onto upstream');
+  assert.deepEqual(commitPost.body.parents, ['upstream-sha']);
+  const patch = env.requests.find((request) => request.method === 'PATCH');
+  assert.deepEqual(patch.body, { sha: 'created-commit-sha', force: true });
+});
+
 test('rebase skips the push when the fork commits are already on upstream', async (t) => {
   const gitCalls = [];
   mockGit(t, gitCalls, 'fork-sha');
