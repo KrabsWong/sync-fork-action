@@ -7,7 +7,13 @@ const path = require('node:path');
 
 const DEFAULT_API_URL = 'https://api.github.com';
 const DEFAULT_SERVER_URL = 'https://github.com';
-const VALID_STRATEGIES = new Set(['fast-forward', 'merge', 'rebase', 'reset']);
+const VALID_STRATEGIES = new Set([
+  'fast-forward',
+  'merge',
+  'rebase',
+  'rebase-squash',
+  'reset',
+]);
 const VALID_REBASE_CONFLICT_MODES = new Set(['fail', 'prefer-upstream']);
 
 function log(message) {
@@ -284,6 +290,54 @@ async function rebaseForkBranch(options) {
   }
 }
 
+async function squashRebase(options) {
+  const { slug, upstreamSlug, upstreamBranch, upstreamSha, previousSha, directory, env, token } = options;
+  const server = serverBaseUrl();
+
+  await runGit(['clone', '--no-checkout', `${server}/${encodeSlug(slug)}.git`, directory], env);
+  await runGit(
+    ['-C', directory, 'remote', 'add', 'upstream', `${server}/${encodeSlug(upstreamSlug)}.git`],
+    env,
+  );
+  await runGit(['-C', directory, 'fetch', '--no-tags', 'upstream', upstreamBranch], env);
+
+  const baseTree = await runGit(['-C', directory, 'rev-parse', `${previousSha}^{tree}`], env);
+  const rawDiff = await runGit(
+    ['-C', directory, 'diff-tree', '-r', '--raw', '--no-commit-id', '-z', previousSha, upstreamSha],
+    env,
+  );
+  const entries = parseRawDiff(rawDiff, true);
+  for (const entry of entries) {
+    if (entry.sha === null || entry.type !== 'blob') continue;
+    const content = await execGit(['-C', directory, 'cat-file', 'blob', entry.sha], env, 'buffer');
+    const uploaded = await createBlob(slug, Buffer.from(content).toString('base64'), token);
+    if (!uploaded.sha) throw new Error(`GitHub API did not return a blob SHA for ${entry.path}.`);
+    entry.sha = uploaded.sha;
+  }
+
+  let tree = baseTree;
+  if (entries.length > 0) {
+    const createdTree = await createTree(slug, baseTree, entries, token);
+    if (!createdTree.sha) throw new Error('GitHub API did not return a tree SHA.');
+    tree = createdTree.sha;
+  }
+
+  const createdCommit = await createCommit(
+    slug,
+    'Rebase fork contents onto upstream',
+    tree,
+    upstreamSha,
+    {
+      name: 'github-actions[bot]',
+      email: '41898282+github-actions[bot]@users.noreply.github.com',
+      date: new Date().toISOString(),
+    },
+    token,
+  );
+  if (!createdCommit.sha) throw new Error('GitHub API did not return a commit SHA.');
+  return createdCommit.sha;
+}
+
 async function compareCommits(slug, previousSha, upstreamSha, token) {
   const base = encodeURIComponent(previousSha);
   const head = encodeURIComponent(upstreamSha);
@@ -319,7 +373,7 @@ async function run() {
   const strategy = getInput('strategy', 'fast-forward');
   if (!VALID_STRATEGIES.has(strategy)) {
     throw new Error(
-      `Input "strategy" must be fast-forward, merge, rebase or reset, received "${strategy}".`,
+      `Input "strategy" must be fast-forward, merge, rebase, rebase-squash or reset, received "${strategy}".`,
     );
   }
   const dryRun = getBooleanInput('dry-run', false);
@@ -418,6 +472,30 @@ async function run() {
     } else {
       updated = true;
       log(`Rebased ${targetBranch} onto upstream (${resultSha}).`);
+    }
+  } else if (strategy === 'rebase-squash') {
+    if (dryRun) {
+      resultSha = previousSha;
+      log(`Dry run: would squash ${targetBranch} onto upstream.`);
+    } else {
+      const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'krabs-fork-sync-'));
+      try {
+        resultSha = await squashRebase({
+          slug: forkSlug,
+          upstreamSlug,
+          upstreamBranch,
+          upstreamSha,
+          previousSha,
+          directory,
+          env: gitEnv(token),
+          token,
+        });
+        await setBranchSha(forkSlug, targetBranch, resultSha, true, token);
+        updated = true;
+        log(`Squash-rebased ${targetBranch} onto upstream (${resultSha}).`);
+      } finally {
+        fs.rmSync(directory, { recursive: true, force: true });
+      }
     }
   } else if (dryRun) {
     log('Dry run: would reset the fork branch to upstream.');
