@@ -1,6 +1,6 @@
 {
   "name": "krabs-fork-sync",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "private": true,
   "description": "Dependency-free GitHub Action for syncing a fork branch from upstream.",
   "scripts": {
